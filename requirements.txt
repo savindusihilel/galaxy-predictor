@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+torch
+numpy
+scikit-learn
+joblib
+nflows
+pydantic
