@@ -4,13 +4,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Interpretable Galaxy Predictor</title>
+    <title>Galaxy Predictor — Physics-Informed Neural Networks</title>
+    <meta name="description" content="Predict galaxy stellar mass, star formation rate, and quenching probability using physics-informed neural networks with explainable uncertainty.">
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <!-- CSS -->
     <link rel="stylesheet" href="/static/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 
 <body>
@@ -21,23 +23,29 @@
         </header>
 
         <main class="grid-layout">
-            <!-- INPUT PANEL -->
-            <section class="panel input-panel">
+            <!-- ═══════════════ INPUT PANEL ═══════════════ -->
+            <section class="panel input-panel" id="inputPanel">
                 <div class="panel-header">
                     <h2>Configuration</h2>
                     <div class="preset-buttons">
-                        <button onclick="loadPreset('star_forming')" class="btn-preset"
-                            title="Star Forming Galaxy Preset">Star Forming</button>
-                        <button onclick="loadPreset('transition')" class="btn-preset"
-                            title="Transition Galaxy Preset">Transition</button>
-                        <button onclick="loadPreset('quenched')" class="btn-preset"
-                            title="Quenched Galaxy Preset">Quenched</button>
+                        <button onclick="loadPreset('star_forming')" class="btn-preset" id="preset-sf"
+                            data-tooltip="Blue-cloud galaxy: low redshift, bright UV">
+                            <span class="preset-dot dot-blue"></span>Star Forming
+                        </button>
+                        <button onclick="loadPreset('transition')" class="btn-preset" id="preset-tr"
+                            data-tooltip="Green-valley galaxy: intermediate properties">
+                            <span class="preset-dot dot-amber"></span>Transition
+                        </button>
+                        <button onclick="loadPreset('quenched')" class="btn-preset" id="preset-qu"
+                            data-tooltip="Red-sequence galaxy: high redshift, faint UV">
+                            <span class="preset-dot dot-red"></span>Quenched
+                        </button>
                     </div>
                 </div>
 
                 <form id="predictForm">
                     <div class="input-group">
-                        <label>Photometry (Magnitudes)</label>
+                        <label>Photometry <span class="label-hint">(Magnitudes)</span></label>
                         <div class="grid-2">
                             <div class="field">
                                 <label for="u">u-band</label>
@@ -55,7 +63,7 @@
                                 <label for="i">i-band</label>
                                 <input type="number" id="i" step="any" placeholder="18.4295" required>
                             </div>
-                            <div class="field">
+                            <div class="field field-full">
                                 <label for="z">z-band</label>
                                 <input type="number" id="z" step="any" placeholder="18.158" required>
                             </div>
@@ -71,55 +79,77 @@
                     </div>
 
                     <button type="submit" class="btn-primary" id="runBtn">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                        </svg>
                         Generate Prediction
                     </button>
                 </form>
             </section>
 
-            <!-- RESULTS PANEL -->
-            <section class="panel result-panel">
+            <!-- ═══════════════ RESULTS PANEL ═══════════════ -->
+            <section class="panel result-panel" id="resultPanel">
                 <div class="loading-overlay hidden" id="loading">
-                    <div class="spinner"></div>
+                    <div class="spinner-wrap">
+                        <div class="spinner"></div>
+                        <span class="spinner-text">Running inference…</span>
+                    </div>
                 </div>
 
+                <!-- Empty state -->
                 <div class="empty-state" id="emptyState">
-                    <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"
-                        stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: 1rem; opacity: 0.5;">
-                        <circle cx="12" cy="12" r="10"></circle>
-                        <path d="M12 16v-4"></path>
-                        <path d="M12 8h.01"></path>
-                    </svg>
-                    <p>Select a preset or enter data to analyze galaxy properties.</p>
+                    <div class="empty-icon">
+                        <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <path d="M12 16v-4"></path>
+                            <path d="M12 8h.01"></path>
+                        </svg>
+                    </div>
+                    <h3>No Prediction Yet</h3>
+                    <p>Select a preset or enter photometry data to<br>analyze galaxy properties.</p>
                 </div>
 
+                <!-- ═══ Results content ═══ -->
                 <div class="results-content hidden" id="resultsContent">
-                    <!-- Physical Properties -->
-                    <div class="result-card">
-                        <div class="metric-row">
-                            <div class="metric">
-                                <span class="metric-label">Stellar Mass</span>
-                                <div class="metric-value-group">
-                                    <span class="metric-value" id="massVal">--</span>
-                                    <span class="metric-unit">log M<sub>☉</sub></span>
-                                </div>
-                                <span class="metric-uncertainty">± <span id="massErr">--</span></span>
+
+                    <!-- ── KPI Metrics (always visible) ── -->
+                    <div class="kpi-row" id="kpiRow">
+                        <div class="kpi-card kpi-mass">
+                            <div class="kpi-label">
+                                Stellar Mass
+                                <span class="info-trigger" data-tooltip="Logarithmic stellar mass in solar units (M☉) inferred from multi-band photometry via the physics-informed neural network.">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+                                </span>
                             </div>
-                            <div class="metric">
-                                <span class="metric-label">Star Formation Rate</span>
-                                <div class="metric-value-group">
-                                    <span class="metric-value" id="sfrVal">--</span>
-                                    <span class="metric-unit">log SFR</span>
-                                </div>
-                                <span class="metric-uncertainty">± <span id="sfrErr">--</span></span>
+                            <div class="kpi-value-row">
+                                <span class="kpi-value" id="massVal">—</span>
+                                <span class="kpi-unit">log M<sub>☉</sub></span>
                             </div>
+                            <span class="kpi-uncertainty" id="massUncertainty">± —</span>
+                        </div>
+                        <div class="kpi-divider"></div>
+                        <div class="kpi-card kpi-sfr">
+                            <div class="kpi-label">
+                                Star Formation Rate
+                                <span class="info-trigger" data-tooltip="Logarithmic star formation rate (M☉/yr) representing the galaxy's current rate of stellar mass assembly.">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+                                </span>
+                            </div>
+                            <div class="kpi-value-row">
+                                <span class="kpi-value" id="sfrVal">—</span>
+                                <span class="kpi-unit">log SFR</span>
+                            </div>
+                            <span class="kpi-uncertainty" id="sfrUncertainty">± —</span>
                         </div>
                     </div>
 
-                    <!-- Quenching Probability -->
-                    <div class="result-card">
+                    <!-- ── Quenching Status (always visible) ── -->
+                    <div class="quenching-card" id="quenchingCard">
                         <div class="card-header">
                             <h3>Quenching Status</h3>
-                            <span class="badge" id="quenchingStatus">--</span>
+                            <span class="badge" id="quenchingStatus">—</span>
                         </div>
 
                         <div class="probability-display">
@@ -129,48 +159,123 @@
                             </div>
                             <div class="prob-labels">
                                 <span>Active Star Forming</span>
-                                <span class="prob-value-text" id="probText">Q = --</span>
+                                <span class="prob-value-text" id="probText">Q = —</span>
                                 <span>Quenched</span>
                             </div>
                         </div>
 
-                        <div class="distribution-plot">
-                            <label>Posterior Distribution (Model Uncertainty)</label>
-                            <div class="histogram" id="histogram">
-                                <!-- Bars injected by JS -->
-                            </div>
+                        <div class="distribution-section">
+                            <label class="section-label">
+                                Posterior Distribution
+                                <span class="label-hint">(Model Uncertainty)</span>
+                            </label>
+                            <div class="histogram" id="histogram"></div>
                         </div>
                     </div>
 
-                    <!-- Comparison -->
-                    <div class="model-comparison-toggle">
-                        <details>
-                            <summary>
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                    <polyline points="6 9 12 15 18 9"></polyline>
-                                </svg>
-                                Compare with Standard Random Forest
-                            </summary>
-                            <div class="comparison-table">
-                                <div class="comp-row header">
-                                    <span>Model Architecture</span>
-                                    <span>Log Mass</span>
-                                    <span>Log SFR</span>
+                    <!-- ═══ Tab System ═══ -->
+                    <div class="tab-system" id="tabSystem">
+                        <nav class="tab-bar" role="tablist" aria-label="Result details">
+                            <button class="tab-btn active" role="tab" aria-selected="true"
+                                aria-controls="panel-interpretation" data-tab="interpretation" id="tab-interpretation">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                                Interpretation
+                            </button>
+                            <button class="tab-btn" role="tab" aria-selected="false"
+                                aria-controls="panel-explainability" data-tab="explainability" id="tab-explainability">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+                                Explainability
+                            </button>
+                            <button class="tab-btn" role="tab" aria-selected="false"
+                                aria-controls="panel-evolution" data-tab="evolution" id="tab-evolution">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+                                Evolution
+                            </button>
+                            <button class="tab-btn" role="tab" aria-selected="false"
+                                aria-controls="panel-diagnostics" data-tab="diagnostics" id="tab-diagnostics">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                                Diagnostics
+                            </button>
+                            <button class="tab-btn" role="tab" aria-selected="false"
+                                aria-controls="panel-comparison" data-tab="comparison" id="tab-comparison">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+                                Comparison
+                            </button>
+                            <div class="tab-indicator" id="tabIndicator"></div>
+                        </nav>
+
+                        <!-- Tab Panels -->
+                        <div class="tab-panel active" id="panel-interpretation" role="tabpanel"
+                            aria-labelledby="tab-interpretation">
+                            <div class="tab-panel-inner">
+                                <h4 class="tab-panel-title">Model Interpretation</h4>
+                                <p id="interpretationText" class="interpretation-text">—</p>
+                            </div>
+                        </div>
+
+                        <div class="tab-panel" id="panel-explainability" role="tabpanel"
+                            aria-labelledby="tab-explainability">
+                            <div class="tab-panel-inner">
+                                <h4 class="tab-panel-title">Feature Importance — Mass Prediction</h4>
+                                <div id="massImportance" class="feature-chart"></div>
+                                <h4 class="tab-panel-title" style="margin-top:2rem;">Feature Importance — SFR Prediction</h4>
+                                <div id="sfrImportance" class="feature-chart"></div>
+                            </div>
+                        </div>
+
+                        <div class="tab-panel" id="panel-evolution" role="tabpanel"
+                            aria-labelledby="tab-evolution">
+                            <div class="tab-panel-inner">
+                                <h4 class="tab-panel-title">Galaxy Evolution Context</h4>
+                                <div class="chart-wrap">
+                                    <canvas id="evolutionChart" height="280"></canvas>
                                 </div>
-                                <div class="comp-row">
-                                    <span style="color: var(--primary-accent); font-weight: 500;">PINN
-                                        (Physics-Informed)</span>
-                                    <span id="pinnCompMass">--</span>
-                                    <span id="pinnCompSfr">--</span>
-                                </div>
-                                <div class="comp-row">
-                                    <span style="color: var(--text-muted);">Random Forest (Baseline)</span>
-                                    <span id="rfCompMass">--</span>
-                                    <span id="rfCompSfr">--</span>
+                                <p class="chart-caption">
+                                    Galaxy position relative to the star-forming main sequence.
+                                </p>
+                            </div>
+                        </div>
+
+                        <div class="tab-panel" id="panel-diagnostics" role="tabpanel"
+                            aria-labelledby="tab-diagnostics">
+                            <div class="tab-panel-inner">
+                                <h4 class="tab-panel-title">Training Diagnostics</h4>
+                                <div class="chart-wrap">
+                                    <canvas id="lossChart"></canvas>
                                 </div>
                             </div>
-                        </details>
+                        </div>
+
+                        <div class="tab-panel" id="panel-comparison" role="tabpanel"
+                            aria-labelledby="tab-comparison">
+                            <div class="tab-panel-inner">
+                                <h4 class="tab-panel-title">Model Comparison</h4>
+                                <p class="comparison-subtitle">PINN (Physics-Informed) vs Random Forest Baseline</p>
+                                <div class="comparison-table">
+                                    <div class="comp-row header">
+                                        <span>Model Architecture</span>
+                                        <span>Log Mass</span>
+                                        <span>Log SFR</span>
+                                    </div>
+                                    <div class="comp-row pinn-row">
+                                        <span class="model-name">
+                                            <span class="model-dot dot-blue"></span>
+                                            PINN (Physics-Informed)
+                                        </span>
+                                        <span class="mono" id="pinnCompMass">—</span>
+                                        <span class="mono" id="pinnCompSfr">—</span>
+                                    </div>
+                                    <div class="comp-row rf-row">
+                                        <span class="model-name">
+                                            <span class="model-dot dot-muted"></span>
+                                            Random Forest (Baseline)
+                                        </span>
+                                        <span class="mono" id="rfCompMass">—</span>
+                                        <span class="mono" id="rfCompSfr">—</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </section>
