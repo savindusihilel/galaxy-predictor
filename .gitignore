@@ -16,7 +16,7 @@ data/
 exp_outputs/
 legacy/
 # Large model files (if not needed in repo history)
-# assets/*.joblib
+assets/*.joblib
 # assets/*.pth
 
 # If you want to track models, comment above. 

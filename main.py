@@ -73,7 +73,7 @@ async def lifespan(app: FastAPI):
 
     flow = build_conditional_maf(
         context_dim=CONTEXT_DIM,
-        n_blocks=4,
+        n_blocks=6,
         hidden_features=64
     ).to(DEVICE)
 
@@ -96,6 +96,69 @@ async def lifespan(app: FastAPI):
 
     if os.path.exists(rf_s):
         models["rf_sfr"] = joblib.load(rf_s)
+
+    # Load demo datasets for validation/test comparison
+    demo_path = os.path.join(ASSETS_DIR, "demo_datasets.npz")
+    if os.path.exists(demo_path):
+        demo_data = np.load(demo_path)
+        models["demo"] = {
+            "X_val": demo_data["X_val"],
+            "yM_val": demo_data["yM_val"],
+            "yS_val": demo_data["yS_val"],
+            "X_test": demo_data["X_test"],
+            "yM_test": demo_data["yM_test"],
+            "yS_test": demo_data["yS_test"]
+        }
+        print("Demo datasets loaded.")
+
+    # Load Random Forest benchmark metrics
+    rf_metrics_path = os.path.join(ASSETS_DIR, "rf_metrics.json")
+    if os.path.exists(rf_metrics_path):
+        with open(rf_metrics_path, "r") as f:
+            models["rf_metrics"] = json.load(f)
+        print("RF metrics loaded.")
+
+    # Compute PINN metrics from demo validation set
+    if "demo" in models and "joint" in models and "scaler" in models:
+        try:
+            X_val = models["demo"]["X_val"]
+            yM_val = models["demo"]["yM_val"]
+            yS_val = models["demo"]["yS_val"]
+
+            X_val_scaled = models["scaler"].transform(X_val)
+            X_val_t = torch.tensor(X_val_scaled, dtype=torch.float32).to(DEVICE)
+
+            with torch.no_grad():
+                out = models["joint"](X_val_t)
+            pred_mass = out["mu_mass"].cpu().numpy().flatten()
+            pred_sfr = out["mu_sfr"].cpu().numpy().flatten()
+
+            from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+            models["pinn_metrics"] = {
+                "mass_metrics": {
+                    "rmse": float(np.sqrt(mean_squared_error(yM_val, pred_mass))),
+                    "mae": float(mean_absolute_error(yM_val, pred_mass)),
+                    "r2": float(r2_score(yM_val, pred_mass))
+                },
+                "sfr_metrics": {
+                    "rmse": float(np.sqrt(mean_squared_error(yS_val, pred_sfr))),
+                    "mae": float(mean_absolute_error(yS_val, pred_sfr)),
+                    "r2": float(r2_score(yS_val, pred_sfr))
+                }
+            }
+            print("PINN metrics computed.")
+        except Exception as e:
+            print(f"Failed to compute PINN metrics: {e}")
+
+    # Load SDSS main sequence data
+    ms_path = os.path.join(ASSETS_DIR, "main_sequence_data.npz")
+    if os.path.exists(ms_path):
+        ms_data = np.load(ms_path)
+        models["main_sequence"] = {
+            "mass": ms_data["mass"].tolist(),
+            "sfr": ms_data["sfr"].tolist()
+        }
+        print(f"Main sequence data loaded ({len(ms_data['mass'])} galaxies).")
 
     print("Models loaded.")
 
@@ -120,6 +183,93 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 @app.get("/")
 async def read_index():
     return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+
+
+@app.get("/training-loss")
+async def get_training_loss():
+
+    history_path = os.path.join(ASSETS_DIR, "training_history.json")
+
+    print("Looking for:", history_path)
+    print("Files in assets:", os.listdir(ASSETS_DIR))
+
+    if not os.path.exists(history_path):
+        return {
+            "epochsA": [],
+            "epochsB": [],
+            "epochsC": [],
+            "stageA_loss": [],
+            "stageB_loss": [],
+            "stageC_loss": []
+        }
+
+    with open(history_path, "r") as f:
+        history = json.load(f)
+
+    stageA = history.get("stageA", {})
+    stageB = history.get("stageB", {})
+    stageC = history.get("stageC", {})
+
+    return {
+        "epochsA": stageA.get("epoch", []),
+        "epochsB": stageB.get("epoch", []),
+        "epochsC": stageC.get("epoch", []),
+
+        "stageA_loss": stageA.get("train_loss", []),
+        "stageB_loss": stageB.get("flow_nll", []),
+        "stageC_loss": stageC.get("train_loss", []),
+
+        "total_loss": stageC.get("train_loss", []),
+        "physics_loss": stageC.get("train_loss", [])
+    }
+
+
+@app.get("/demo-galaxies")
+async def get_demo_galaxies(dataset: str = "val", n: int = 20):
+    if "demo" not in models:
+        return {"galaxies": []}
+
+    if dataset == "test":
+        X = models["demo"]["X_test"]
+        yM = models["demo"]["yM_test"]
+        yS = models["demo"]["yS_test"]
+    else:
+        X = models["demo"]["X_val"]
+        yM = models["demo"]["yM_val"]
+        yS = models["demo"]["yS_val"]
+
+    n = min(n, len(X))
+    galaxies = []
+
+    for i in range(n):
+        row = X[i]
+        galaxies.append({
+            "id": int(i),
+            "features": row.tolist(),
+            "true_mass": float(yM[i]),
+            "true_sfr": float(yS[i])
+        })
+
+    return {"galaxies": galaxies}
+
+
+@app.get("/main-sequence")
+async def get_main_sequence():
+    if "main_sequence" not in models:
+        return {"mass": [], "sfr": []}
+    return models["main_sequence"]
+
+
+@app.get("/rf-metrics")
+async def get_rf_metrics():
+    result = {}
+    if "rf_metrics" in models:
+        result["rf"] = models["rf_metrics"]
+    if "pinn_metrics" in models:
+        result["pinn"] = models["pinn_metrics"]
+    if not result:
+        return {"error": "No metrics loaded"}
+    return result
 
 
 # ======================
